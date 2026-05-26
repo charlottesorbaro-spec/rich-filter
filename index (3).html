@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>Rich · John Richmond</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;1,300&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Cormorant Garamond',serif;}
+
+  #loading{position:fixed;inset:0;background:#0a0609;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;z-index:100;transition:opacity 0.8s;}
+  #loading.hidden{opacity:0;pointer-events:none;}
+  .lb{font-size:11px;letter-spacing:.4em;color:#9a7a50;text-transform:uppercase;margin-bottom:12px;}
+  .lt{font-size:52px;font-style:italic;font-weight:300;color:#f0e0bc;letter-spacing:.1em;}
+  .lbar{width:120px;height:1px;background:rgba(201,169,110,0.2);margin-top:28px;overflow:hidden;}
+  .lbar-fill{height:100%;background:#c9a96e;width:0%;transition:width 0.3s;}
+  .ls{margin-top:16px;font-size:10px;letter-spacing:.2em;color:#4a3520;text-transform:uppercase;text-align:center;padding:0 30px;}
+
+  #scene{position:fixed;inset:0;}
+  /* KEY: video and canvas must be same size and NOT css-transformed for coord mapping */
+  video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  canvas{position:absolute;inset:0;width:100%;height:100%;}
+
+  #ui{position:fixed;bottom:0;left:0;right:0;padding:0 0 44px;
+    background:linear-gradient(to top,rgba(0,0,0,0.75) 0%,transparent 100%);
+    display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none;}
+  .ub{font-size:10px;letter-spacing:.38em;color:#c9a96e;text-transform:uppercase;opacity:.85;}
+  .un{font-size:42px;font-style:italic;font-weight:300;color:#f0e0bc;letter-spacing:.12em;
+    text-shadow:0 0 24px rgba(201,169,110,0.5);}
+  .ut{font-size:9px;letter-spacing:.22em;color:#9a7a50;text-transform:uppercase;}
+
+  .c{width:20px;height:20px;border-color:#c9a96e;border-style:solid;position:fixed;opacity:.5;}
+  .c.tl{top:16px;left:16px;border-width:1px 0 0 1px;}
+  .c.tr{top:16px;right:16px;border-width:1px 1px 0 0;}
+  .c.bl{bottom:16px;left:16px;border-width:0 0 1px 1px;}
+  .c.br{bottom:16px;right:16px;border-width:0 1px 1px 0;}
+
+  #hint{position:fixed;top:44%;left:50%;transform:translate(-50%,-50%);
+    font-size:11px;letter-spacing:.22em;color:rgba(201,169,110,0.55);text-transform:uppercase;
+    pointer-events:none;text-align:center;opacity:1;transition:opacity .5s;}
+  #hint.hide{opacity:0;}
+
+  #snap{position:fixed;bottom:60px;left:50%;transform:translateX(-50%);
+    width:70px;height:70px;border-radius:50%;border:3px solid rgba(255,255,255,0.9);
+    background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+  #snap:active{transform:translateX(-50%) scale(.92);}
+  #si{width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,0.9);}
+  #flash{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none;}
+  #msg{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:rgba(0,0,0,0.75);color:#f0e0bc;font-size:13px;letter-spacing:.15em;
+    padding:14px 28px;border:1px solid rgba(201,169,110,0.4);opacity:0;
+    transition:opacity .3s;pointer-events:none;text-align:center;}
+  #msg.show{opacity:1;}
+</style>
+</head>
+<body>
+<div id="loading">
+  <div class="lb">John Richmond</div>
+  <div class="lt">Rich</div>
+  <div class="lbar"><div class="lbar-fill" id="lf"></div></div>
+  <div class="ls" id="ls">Starting…</div>
+</div>
+
+<div id="scene">
+  <video id="v" autoplay playsinline muted></video>
+  <canvas id="c"></canvas>
+</div>
+
+<div class="c tl"></div><div class="c tr"></div><div class="c bl"></div><div class="c br"></div>
+<div id="hint">Open your mouth to reveal the grill</div>
+
+<div id="ui">
+  <div class="ub">John Richmond</div>
+  <div class="un">Rich</div>
+  <div class="ut">Dare to be legendary</div>
+</div>
+
+<button id="snap"><div id="si"></div></button>
+<div id="flash"></div>
+<div id="msg"></div>
+
+<script>
+const vid = document.getElementById('v');
+const can = document.getElementById('c');
+const ctx = can.getContext('2d');
+const lf  = document.getElementById('lf');
+const ls  = document.getElementById('ls');
+const ld  = document.getElementById('loading');
+const hint= document.getElementById('hint');
+
+let W=0,H=0,lastFace=null,grillA=0,frameN=0,parts=[];
+let vidW=0,vidH=0; // actual video pixel dimensions
+let canW=0,canH=0; // canvas display dimensions
+
+function setSt(t,p){ls.textContent=t;lf.style.width=p+'%';}
+
+function resize(){
+  can.width  = window.innerWidth;
+  can.height = window.innerHeight;
+  W=can.width; H=can.height;
+}
+resize();
+window.addEventListener('resize',resize);
+
+// ---- CRITICAL: map video coords → canvas coords ----
+// The video is CSS object-fit:cover on the canvas size.
+// We need to find the actual rendered region of the video.
+function getVideoTransform(){
+  const vAR = vidW / vidH;
+  const cAR = W / H;
+  let scale, offX, offY;
+  if(vAR > cAR){
+    // video wider than canvas — letterboxed on sides
+    scale = H / vidH;
+    offX  = (W - vidW * scale) / 2;
+    offY  = 0;
+  } else {
+    // video taller — letterboxed top/bottom
+    scale = W / vidW;
+    offX  = 0;
+    offY  = (H - vidH * scale) / 2;
+  }
+  return {scale, offX, offY};
+}
+
+// Convert a video-space point to canvas-space, with horizontal flip
+function vToC(px, py){
+  const {scale, offX, offY} = getVideoTransform();
+  // horizontal mirror (selfie cam)
+  const cx = W - (px * scale + offX);
+  const cy = py * scale + offY;
+  return {x: cx, y: cy};
+}
+
+async function init(){
+  setSt('Starting camera…',15);
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:'user',width:{ideal:1920},height:{ideal:1080}},audio:false
+    });
+    vid.srcObject = stream;
+    await vid.play();
+    // Wait for actual video dimensions
+    await new Promise(res=>{
+      const check=()=>{ if(vid.videoWidth>0){res();}else{requestAnimationFrame(check);} };
+      check();
+    });
+    vidW = vid.videoWidth;
+    vidH = vid.videoHeight;
+  } catch(e){
+    setSt('Allow camera access and reload',0); return;
+  }
+
+  setSt('Loading face-api…',35);
+  await loadSrc('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js',10000);
+  if(!window.faceapi){ setSt('Could not load face tracking',40); finish(); return; }
+
+  setSt('Loading models…',55);
+  const M='https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights';
+  try{
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(M),
+      faceapi.nets.faceLandmark68Net.loadFromUri(M),
+    ]);
+  } catch(e){ setSt('Model error — retrying…',65);
+    try{
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(M),
+        faceapi.nets.faceLandmark68Net.loadFromUri(M),
+      ]);
+    } catch(e2){ finish(); return; }
+  }
+
+  setSt('Ready',100);
+  detect();
+  setTimeout(finish,400);
+}
+
+function loadSrc(src,timeout){
+  return new Promise(res=>{
+    const s=document.createElement('script');
+    s.src=src; s.onload=()=>res(true); s.onerror=()=>res(false);
+    setTimeout(()=>res(false),timeout);
+    document.head.appendChild(s);
+  });
+}
+
+function finish(){
+  lf.style.width='100%';
+  setTimeout(()=>ld.classList.add('hidden'),600);
+  requestAnimationFrame(loop);
+}
+
+async function detect(){
+  while(true){
+    if(window.faceapi && vid.readyState>=2){
+      try{
+        const opts=new faceapi.TinyFaceDetectorOptions({inputSize:416,scoreThreshold:0.3});
+        const r=await faceapi.detectSingleFace(vid,opts).withFaceLandmarks();
+        lastFace=r||null;
+      }catch(e){lastFace=null;}
+    }
+    await new Promise(r=>setTimeout(r,60));
+  }
+}
+
+// ---- Mouth openness using landmark 62 (top inner) and 66 (bottom inner) ----
+function mouthOpen(pts){
+  const top = vToC(pts[62].x, pts[62].y);
+  const bot = vToC(pts[66].x, pts[66].y);
+  // Also measure face height via chin(8) to nose(27)
+  const nose = vToC(pts[27].x, pts[27].y);
+  const chin = vToC(pts[8].x,  pts[8].y);
+  const faceH = Math.abs(chin.y - nose.y);
+  const gap   = Math.abs(bot.y - top.y);
+  return faceH > 0 ? gap/faceH : 0;
+}
+
+// ---- Draw grill ----
+function drawGrill(pts, alpha){
+  if(alpha<0.01) return;
+
+  // Key landmark groups (all converted to canvas space):
+  // 48 = left mouth corner, 54 = right mouth corner
+  // 50,51,52 = upper outer lip top arc
+  // 60,61,62,63,64 = inner upper lip
+  // 65,66,67 = inner lower lip bottom
+
+  const lc  = vToC(pts[48].x, pts[48].y); // left corner
+  const rc  = vToC(pts[54].x, pts[54].y); // right corner
+
+  // Inner upper lip row
+  const iul = [60,61,62,63,64].map(i=>vToC(pts[i].x,pts[i].y));
+
+  // Grill dimensions based on mouth corners
+  const gLeft  = Math.min(lc.x, rc.x);
+  const gRight = Math.max(lc.x, rc.x);
+  const gW     = gRight - gLeft;
+  const gH     = gW * 0.27;
+
+  // Top of grill = average of inner upper lip y
+  const topY = iul.reduce((s,p)=>s+p.y,0)/iul.length;
+
+  const letters = ['R','I','C','H'];
+  const n = letters.length;
+  const tW = gW / n;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // Clip to mouth region so grill doesn't bleed outside lips
+  ctx.beginPath();
+  ctx.moveTo(gLeft, topY - gH*0.3);
+  // Follow inner upper lip curve
+  ctx.moveTo(iul[0].x, iul[0].y);
+  ctx.bezierCurveTo(iul[1].x,iul[1].y, iul[3].x,iul[3].y, iul[4].x,iul[4].y);
+  ctx.lineTo(iul[4].x, iul[4].y + gH*1.15);
+  ctx.lineTo(iul[0].x, iul[0].y + gH*1.15);
+  ctx.closePath();
+  ctx.clip();
+
+  // Draw each tooth
+  for(let i=0;i<n;i++){
+    const tx = gLeft + i*tW;
+    const gap = tW*0.045;
+
+    // Tooth top follows the inner lip arc
+    const prog = (i+0.5)/n;
+    const idx  = prog*(iul.length-1);
+    const i0   = Math.min(Math.floor(idx), iul.length-2);
+    const frac = idx-i0;
+    const ty   = iul[i0].y*(1-frac)+iul[i0+1].y*frac;
+
+    const g=ctx.createLinearGradient(tx,ty,tx,ty+gH);
+    g.addColorStop(0,'#fff8b0');
+    g.addColorStop(0.12,'#ffe55c');
+    g.addColorStop(0.42,'#c9a96e');
+    g.addColorStop(0.75,'#8a5e28');
+    g.addColorStop(1,'#4a2c0a');
+    ctx.fillStyle=g;
+    ctx.shadowColor='rgba(255,200,60,0.35)';
+    ctx.shadowBlur=5;
+    rr(ctx,tx+gap,ty,tW-gap*2,gH,Math.min(tW*0.1,4));
+    ctx.fill();
+
+    // Shine
+    const sh=ctx.createLinearGradient(tx,ty,tx,ty+gH*0.38);
+    sh.addColorStop(0,'rgba(255,255,220,0.55)');
+    sh.addColorStop(1,'rgba(255,255,220,0)');
+    ctx.fillStyle=sh; ctx.shadowBlur=0;
+    rr(ctx,tx+gap+tW*0.08,ty+1.5,tW*0.38,gH*0.3,2); ctx.fill();
+
+    // Gap
+    if(i>0){ctx.fillStyle='rgba(0,0,0,0.4)';ctx.fillRect(tx,ty,gap*2,gH);}
+
+    // Letter
+    const fs=Math.max(gH*0.46,8);
+    ctx.font=`900 ${fs}px Arial Black,Arial,sans-serif`;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillStyle='rgba(40,20,3,0.5)'; ctx.shadowBlur=0;
+    ctx.fillText(letters[i],tx+tW/2+0.7,ty+gH*0.52+0.7);
+    ctx.fillStyle='#fffce0';
+    ctx.shadowColor='rgba(255,240,100,0.8)'; ctx.shadowBlur=3;
+    ctx.fillText(letters[i],tx+tW/2,ty+gH*0.5);
+  }
+  ctx.restore();
+
+  // Top bar follows lip curve
+  ctx.save();
+  ctx.globalAlpha=alpha;
+  const bH=Math.max(gH*0.2,3);
+  ctx.beginPath();
+  ctx.moveTo(iul[0].x, iul[0].y-bH);
+  ctx.bezierCurveTo(iul[1].x,iul[1].y-bH,iul[3].x,iul[3].y-bH,iul[4].x,iul[4].y-bH);
+  ctx.lineTo(iul[4].x,iul[4].y+1);
+  ctx.bezierCurveTo(iul[3].x,iul[3].y+1,iul[1].x,iul[1].y+1,iul[0].x,iul[0].y+1);
+  ctx.closePath();
+  const bg=ctx.createLinearGradient(gLeft,topY-bH,gLeft,topY+1);
+  bg.addColorStop(0,'#ffe880'); bg.addColorStop(0.5,'#c9a96e'); bg.addColorStop(1,'#7a5020');
+  ctx.fillStyle=bg; ctx.shadowColor='rgba(255,200,60,0.5)'; ctx.shadowBlur=7;
+  ctx.fill();
+  for(let i=1;i<n;i++){ctx.fillStyle='rgba(90,55,10,0.4)';ctx.fillRect(gLeft+i*tW-1,topY-bH,2,bH+1);}
+  ctx.restore();
+
+  // Sparkle
+  if(alpha>0.5 && frameN%7===0){
+    const cx=(gLeft+gRight)/2;
+    for(let i=0;i<2;i++) parts.push({
+      x:cx+(Math.random()-.5)*gW, y:topY-2,
+      vx:(Math.random()-.5)*.6, vy:-(0.4+Math.random()*.8),
+      life:1,decay:0.025+Math.random()*.015,size:.6+Math.random()*1.3
+    });
+  }
+}
+
+function rr(c,x,y,w,h,r){
+  r=Math.min(r,w/2,h/2);
+  c.beginPath();
+  c.moveTo(x+r,y); c.lineTo(x+w-r,y); c.quadraticCurveTo(x+w,y,x+w,y+r);
+  c.lineTo(x+w,y+h-r); c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  c.lineTo(x+r,y+h); c.quadraticCurveTo(x,y+h,x,y+h-r);
+  c.lineTo(x,y+r); c.quadraticCurveTo(x,y,x+r,y); c.closePath();
+}
+
+function drawParts(){
+  for(let i=parts.length-1;i>=0;i--){
+    const p=parts[i];
+    p.x+=p.vx; p.y+=p.vy; p.vy+=0.015; p.life-=p.decay;
+    if(p.life<=0){parts.splice(i,1);continue;}
+    ctx.save(); ctx.globalAlpha=p.life*.7;
+    ctx.fillStyle='#c9a96e';
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.size,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+let hintHidden=false;
+function loop(){
+  requestAnimationFrame(loop);
+  ctx.clearRect(0,0,W,H);
+
+  if(lastFace){
+    if(!hintHidden){hint.classList.add('hide');hintHidden=true;}
+    const pts=lastFace.landmarks.positions;
+    const open=mouthOpen(pts);
+    // threshold: open > 0.08 of face height = showing teeth
+    const target = open > 0.08 ? Math.min((open-0.08)/0.06, 1) : 0;
+    grillA += (target-grillA)*0.18;
+    drawGrill(pts, grillA);
+  } else {
+    grillA *= 0.85;
+    if(!hintHidden){hint.classList.remove('hide');}
+  }
+
+  drawParts();
+  frameN++;
+}
+
+// Capture
+document.getElementById('snap').addEventListener('click',()=>{
+  const fl=document.getElementById('flash');
+  fl.style.transition='none'; fl.style.opacity='1';
+  setTimeout(()=>{fl.style.transition='opacity .4s';fl.style.opacity='0';},80);
+
+  const out=document.createElement('canvas');
+  out.width=W; out.height=H;
+  const oc=out.getContext('2d');
+
+  // Draw video mirrored to match display
+  const {scale,offX,offY}=getVideoTransform();
+  oc.save();
+  oc.translate(W,0); oc.scale(-1,1);
+  oc.drawImage(vid, offX, offY, vidW*scale, vidH*scale);
+  oc.restore();
+
+  oc.drawImage(can,0,0);
+  oc.font='300 italic 38px Cormorant Garamond,Georgia,serif';
+  oc.fillStyle='rgba(240,224,188,0.92)'; oc.textAlign='center';
+  oc.fillText('Rich',W/2,H-60);
+  oc.font='300 11px Cormorant Garamond,Georgia,serif';
+  oc.fillStyle='rgba(154,122,80,0.85)';
+  oc.fillText('JOHN RICHMOND',W/2,H-38);
+  const a=document.createElement('a');
+  a.href=out.toDataURL('image/jpeg',.92);
+  a.download='rich-johnrichmond.jpg'; a.click();
+  const m=document.getElementById('msg');
+  m.textContent='Photo saved'; m.classList.add('show');
+  setTimeout(()=>m.classList.remove('show'),2200);
+});
+
+init();
+</script>
+</body>
+</html>
