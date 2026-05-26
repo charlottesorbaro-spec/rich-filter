@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>Rich · John Richmond</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Cormorant Garamond',serif;}
+
+  #loading{
+    position:fixed;inset:0;background:#0a0609;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;z-index:100;transition:opacity 0.8s ease;
+  }
+  #loading.hidden{opacity:0;pointer-events:none;}
+  .load-brand{font-size:11px;letter-spacing:.4em;color:#9a7a50;text-transform:uppercase;margin-bottom:12px;}
+  .load-title{font-size:52px;font-style:italic;font-weight:300;color:#f0e0bc;letter-spacing:.1em;
+    text-shadow:0 0 40px rgba(201,169,110,0.4);}
+  .load-bar{width:120px;height:1px;background:rgba(201,169,110,0.2);margin-top:28px;overflow:hidden;}
+  .load-bar-fill{height:100%;background:#c9a96e;width:0%;transition:width 0.3s;}
+  .load-status{margin-top:16px;font-size:10px;letter-spacing:.2em;color:#4a3520;text-transform:uppercase;text-align:center;padding:0 20px;}
+
+  #scene{position:fixed;inset:0;}
+  video#cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);}
+  canvas#overlay{position:absolute;inset:0;width:100%;height:100%;}
+
+  #ui-bottom{
+    position:fixed;bottom:0;left:0;right:0;padding:0 0 44px;
+    background:linear-gradient(to top,rgba(0,0,0,0.75) 0%,transparent 100%);
+    display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none;
+  }
+  .ui-brand{font-size:10px;letter-spacing:.38em;color:#c9a96e;text-transform:uppercase;opacity:.85;}
+  .ui-name{font-size:42px;font-style:italic;font-weight:300;color:#f0e0bc;letter-spacing:.12em;
+    text-shadow:0 0 24px rgba(201,169,110,0.5);}
+  .ui-tag{font-size:9px;letter-spacing:.22em;color:#9a7a50;text-transform:uppercase;}
+
+  .corner{width:20px;height:20px;border-color:#c9a96e;border-style:solid;position:fixed;opacity:.55;}
+  .corner.tl{top:16px;left:16px;border-width:1px 0 0 1px;}
+  .corner.tr{top:16px;right:16px;border-width:1px 1px 0 0;}
+  .corner.bl{bottom:16px;left:16px;border-width:0 0 1px 1px;}
+  .corner.br{bottom:16px;right:16px;border-width:0 1px 1px 0;}
+
+  #hint{
+    position:fixed;bottom:160px;left:50%;transform:translateX(-50%);
+    font-size:11px;letter-spacing:.2em;color:rgba(201,169,110,0.6);text-transform:uppercase;
+    pointer-events:none;text-align:center;white-space:nowrap;
+  }
+
+  #snap-btn{
+    position:fixed;bottom:60px;left:50%;transform:translateX(-50%);
+    width:70px;height:70px;border-radius:50%;
+    border:3px solid rgba(255,255,255,0.9);background:transparent;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+  }
+  #snap-btn:active{transform:translateX(-50%) scale(.92);}
+  #snap-inner{width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,0.9);}
+  #flash{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .05s;}
+  #saved-msg{
+    position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:rgba(0,0,0,0.75);color:#f0e0bc;font-size:13px;letter-spacing:.15em;
+    padding:14px 28px;border:1px solid rgba(201,169,110,0.4);opacity:0;
+    transition:opacity .3s;pointer-events:none;text-align:center;
+  }
+  #saved-msg.show{opacity:1;}
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="load-brand">John Richmond</div>
+  <div class="load-title">Rich</div>
+  <div class="load-bar"><div class="load-bar-fill" id="load-fill"></div></div>
+  <div class="load-status" id="load-status">Starting…</div>
+</div>
+
+<div id="scene">
+  <video id="cam" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+</div>
+
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+<div id="hint">Smile to reveal your grill</div>
+
+<div id="ui-bottom">
+  <div class="ui-brand">John Richmond</div>
+  <div class="ui-name">Rich</div>
+  <div class="ui-tag">Dare to be legendary</div>
+</div>
+
+<button id="snap-btn" aria-label="Capture"><div id="snap-inner"></div></button>
+<div id="flash"></div>
+<div id="saved-msg"></div>
+
+<script>
+const video = document.getElementById('cam');
+const canvas = document.getElementById('overlay');
+const ctx = canvas.getContext('2d');
+const loadFill = document.getElementById('load-fill');
+const loadStatus = document.getElementById('load-status');
+const loadingEl = document.getElementById('loading');
+
+let frameCount = 0;
+let lastFace = null;
+let grillAlpha = 0;
+let particles = [];
+let vw = 0, vh = 0;
+
+function resize(){
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  vw = canvas.width; vh = canvas.height;
+}
+resize();
+window.addEventListener('resize', resize);
+
+function setStatus(t, p){
+  loadStatus.textContent = t;
+  loadFill.style.width = p + '%';
+}
+
+function finishLoading(){
+  loadFill.style.width = '100%';
+  setTimeout(() => loadingEl.classList.add('hidden'), 600);
+  requestAnimationFrame(loop);
+}
+
+async function init(){
+  // Start camera
+  setStatus('Starting camera…', 15);
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:'user', width:{ideal:1280}, height:{ideal:720}}, audio:false
+    });
+    video.srcObject = stream;
+    await video.play();
+  } catch(e){
+    setStatus('Please allow camera access and reload', 0);
+    return;
+  }
+
+  // Load face-api
+  setStatus('Loading face detection…', 35);
+  await loadScript('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js', 10000);
+
+  if(!window.faceapi){
+    setStatus('Could not load face detection', 35);
+    // still launch without face mode
+    finishLoading(); return;
+  }
+
+  // Load models
+  setStatus('Loading models… (may take a moment)', 55);
+  const MODEL = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights';
+  try{
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL),
+    ]);
+  } catch(e){
+    setStatus('Model load failed, retrying…', 65);
+    try{
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL),
+      ]);
+    } catch(e2){
+      finishLoading(); return;
+    }
+  }
+
+  setStatus('Ready', 100);
+  startDetection();
+  setTimeout(finishLoading, 400);
+}
+
+function loadScript(src, timeout){
+  return new Promise(res => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => res(true);
+    s.onerror = () => res(false);
+    setTimeout(() => res(false), timeout);
+    document.head.appendChild(s);
+  });
+}
+
+function startDetection(){
+  setInterval(async () => {
+    if(!window.faceapi || video.readyState < 2) return;
+    try{
+      const opts = new faceapi.TinyFaceDetectorOptions({inputSize: 320, scoreThreshold: 0.35});
+      const r = await faceapi.detectSingleFace(video, opts).withFaceLandmarks();
+      lastFace = r || null;
+    } catch(e){ lastFace = null; }
+  }, 80);
+}
+
+// ---- Mouth openness: ratio of inner lip gap to face height ----
+function getMouthOpen(positions, sx, sy, faceH){
+  // landmark 62 = top inner lip, 66 = bottom inner lip
+  const top = {x: vw - positions[62].x*sx, y: positions[62].y*sy};
+  const bot = {x: vw - positions[66].x*sx, y: positions[66].y*sy};
+  const gap = Math.abs(bot.y - top.y);
+  // open if gap > ~6% of face height
+  return gap / (faceH * 0.06);
+}
+
+// ---- Draw grill fitted to upper teeth row ----
+function drawGrill(positions, sx, sy, alpha){
+  if(alpha < 0.01) return;
+
+  const flip = x => vw - x*sx;
+  const fy   = y => y*sy;
+
+  // Inner upper lip: landmarks 60-64 (5 points across top of mouth opening)
+  // Inner lower lip: landmarks 64-68 (wraps back)
+  const pts = positions;
+
+  // Upper inner lip points (60,61,62,63,64)
+  const ul = [60,61,62,63,64].map(i => ({x:flip(pts[i].x), y:fy(pts[i].y)}));
+  // Outer upper lip for width reference (48,49,50,51,52,53,54)
+  const ol = [48,54].map(i => ({x:flip(pts[i].x), y:fy(pts[i].y)}));
+
+  // Grill spans from outer lip corner to outer lip corner
+  const grillLeft  = Math.min(ol[0].x, ol[1].x);
+  const grillRight = Math.max(ol[0].x, ol[1].x);
+  const grillW = grillRight - grillLeft;
+
+  // Top of grill = just below upper lip inner points
+  // Height = proportional to face
+  const avgUlY = ul.reduce((s,p)=>s+p.y,0)/ul.length;
+  const grillTop = avgUlY;
+  const grillH = grillW * 0.28;
+
+  const letters = ['R','I','C','H'];
+  const n = letters.length;
+  const toothW = grillW / n;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // Clip to a curved region following the upper lip arc
+  ctx.beginPath();
+  ctx.moveTo(grillLeft, grillTop + grillH * 1.1);
+  // bottom straight
+  ctx.lineTo(grillRight, grillTop + grillH * 1.1);
+  // right side up
+  ctx.lineTo(grillRight, ul[4].y);
+  // follow upper lip curve across top
+  ctx.lineTo(ul[4].x, ul[4].y);
+  ctx.bezierCurveTo(
+    ul[3].x, ul[3].y,
+    ul[1].x, ul[1].y,
+    ul[0].x, ul[0].y
+  );
+  ctx.lineTo(grillLeft, grillTop + grillH * 1.1);
+  ctx.closePath();
+  ctx.clip();
+
+  for(let i = 0; i < n; i++){
+    const tx = grillLeft + i * toothW;
+    const gap = toothW * 0.045;
+
+    // Tooth top follows the lip curve
+    const prog = (i + 0.5) / n;
+    const li = prog * (ul.length - 1);
+    const lf = li - Math.floor(li);
+    const li0 = Math.min(Math.floor(li), ul.length-2);
+    const toothTopY = ul[li0].y*(1-lf) + ul[li0+1].y*lf;
+
+    const tH = grillH;
+
+    // Gold gradient
+    const g = ctx.createLinearGradient(tx, toothTopY, tx, toothTopY + tH);
+    g.addColorStop(0,   '#fff7b0');
+    g.addColorStop(0.1, '#ffe55c');
+    g.addColorStop(0.4, '#c9a96e');
+    g.addColorStop(0.72,'#8a5e28');
+    g.addColorStop(1,   '#5a3a10');
+    ctx.fillStyle = g;
+    ctx.shadowColor = 'rgba(255,200,60,0.4)';
+    ctx.shadowBlur = 6;
+    roundRect(ctx, tx+gap, toothTopY, toothW-gap*2, tH, Math.min(toothW*0.1,4));
+    ctx.fill();
+
+    // Shine highlight
+    const sh = ctx.createLinearGradient(tx+gap, toothTopY, tx+gap, toothTopY+tH*0.4);
+    sh.addColorStop(0,'rgba(255,255,220,0.55)');
+    sh.addColorStop(1,'rgba(255,255,220,0)');
+    ctx.fillStyle = sh; ctx.shadowBlur = 0;
+    roundRect(ctx, tx+gap+toothW*0.08, toothTopY+2, toothW*0.4, tH*0.32, 2);
+    ctx.fill();
+
+    // Gap between teeth
+    if(i > 0){
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(tx, toothTopY, gap*2, tH);
+    }
+
+    // Letter
+    const fs = Math.max(tH * 0.46, 8);
+    ctx.font = `900 ${fs}px Arial Black,Arial,sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(50,28,5,0.55)';
+    ctx.shadowBlur = 0;
+    ctx.fillText(letters[i], tx+toothW/2+0.8, toothTopY+tH*0.52+0.8);
+    ctx.fillStyle = '#fffce0';
+    ctx.shadowColor = 'rgba(255,240,100,0.9)';
+    ctx.shadowBlur = 4;
+    ctx.fillText(letters[i], tx+toothW/2, toothTopY+tH*0.5);
+  }
+
+  ctx.restore();
+
+  // Top grill bar following lip curve — outside clip
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const barH = Math.max(grillH * 0.2, 4);
+
+  ctx.beginPath();
+  ctx.moveTo(grillLeft, ul[0].y - barH);
+  ctx.bezierCurveTo(
+    ul[1].x, ul[1].y - barH,
+    ul[3].x, ul[3].y - barH,
+    grillRight, ul[4].y - barH
+  );
+  ctx.lineTo(grillRight, ul[4].y + 1);
+  ctx.bezierCurveTo(
+    ul[3].x, ul[3].y + 1,
+    ul[1].x, ul[1].y + 1,
+    grillLeft, ul[0].y + 1
+  );
+  ctx.closePath();
+
+  const bg = ctx.createLinearGradient(grillLeft, ul[0].y-barH, grillLeft, ul[0].y+1);
+  bg.addColorStop(0,'#ffe880');
+  bg.addColorStop(0.5,'#c9a96e');
+  bg.addColorStop(1,'#7a5020');
+  ctx.fillStyle = bg;
+  ctx.shadowColor = 'rgba(255,200,60,0.6)';
+  ctx.shadowBlur = 8;
+  ctx.fill();
+
+  // dividers on bar
+  ctx.fillStyle = 'rgba(100,65,15,0.4)';
+  for(let i=1;i<n;i++){
+    ctx.fillRect(grillLeft+i*toothW-1, ul[0].y-barH, 2, barH+1);
+  }
+  ctx.restore();
+
+  // Particles
+  if(alpha > 0.5 && frameCount % 7 === 0){
+    const cx = (grillLeft+grillRight)/2;
+    for(let i=0;i<2;i++){
+      particles.push({
+        x: cx+(Math.random()-.5)*grillW,
+        y: grillTop - Math.random()*4,
+        vx:(Math.random()-.5)*.6,
+        vy:-(0.4+Math.random()*.8),
+        life:1, decay:0.024+Math.random()*.016,
+        size:.6+Math.random()*1.4
+      });
+    }
+  }
+}
+
+function drawParticles(){
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];
+    p.x+=p.vx; p.y+=p.vy; p.vy+=0.015; p.life-=p.decay;
+    if(p.life<=0){particles.splice(i,1);continue;}
+    ctx.save();
+    ctx.globalAlpha=p.life*.75;
+    ctx.fillStyle='#c9a96e';
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.size,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function roundRect(ctx,x,y,w,h,r){
+  r=Math.min(r,w/2,h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y);
+  ctx.closePath();
+}
+
+function loop(){
+  requestAnimationFrame(loop);
+  ctx.clearRect(0,0,vw,vh);
+
+  if(lastFace && window.faceapi){
+    const box = lastFace.detection.box;
+    const sx  = vw / (video.videoWidth  || vw);
+    const sy  = vh / (video.videoHeight || vh);
+    const faceH = box.height * sy;
+    const positions = lastFace.landmarks.positions;
+
+    const openness = getMouthOpen(positions, sx, sy, faceH);
+
+    // Grill appears when openness > 1.0 (mouth clearly open / smiling with teeth)
+    // Smooth fade in/out
+    const target = openness > 1.0 ? Math.min((openness - 1.0) / 0.8, 1.0) : 0;
+    grillAlpha += (target - grillAlpha) * 0.2;
+
+    drawGrill(positions, sx, sy, grillAlpha);
+  } else {
+    // No face detected — fade out grill
+    grillAlpha += (0 - grillAlpha) * 0.15;
+    if(grillAlpha > 0.01){
+      // keep drawing at fading alpha but we have no positions — just decay
+    }
+  }
+
+  drawParticles();
+  frameCount++;
+}
+
+// Capture
+document.getElementById('snap-btn').addEventListener('click',()=>{
+  const flash=document.getElementById('flash');
+  flash.style.transition='opacity .05s'; flash.style.opacity='1';
+  setTimeout(()=>{ flash.style.transition='opacity .4s'; flash.style.opacity='0'; },80);
+  const out=document.createElement('canvas');
+  out.width=vw; out.height=vh;
+  const oc=out.getContext('2d');
+  oc.save(); oc.scale(-1,1); oc.translate(-vw,0);
+  oc.drawImage(video,0,0,vw,vh); oc.restore();
+  oc.drawImage(canvas,0,0);
+  oc.font='300 italic 38px Cormorant Garamond,Georgia,serif';
+  oc.fillStyle='rgba(240,224,188,0.92)'; oc.textAlign='center';
+  oc.fillText('Rich',vw/2,vh-60);
+  oc.font='300 11px Cormorant Garamond,Georgia,serif';
+  oc.fillStyle='rgba(154,122,80,0.85)';
+  oc.fillText('JOHN RICHMOND',vw/2,vh-38);
+  const a=document.createElement('a');
+  a.href=out.toDataURL('image/jpeg',.92); a.download='rich-johnrichmond.jpg'; a.click();
+  const msg=document.getElementById('saved-msg');
+  msg.textContent='Photo saved'; msg.classList.add('show');
+  setTimeout(()=>msg.classList.remove('show'),2200);
+});
+
+init();
+</script>
+</body>
+</html>
