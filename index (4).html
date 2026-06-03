@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>Rich · John Richmond</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;1,300&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#000;}
+  #v{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);}
+  #c{position:fixed;inset:0;width:100%;height:100%;}
+  #ld{position:fixed;inset:0;background:#0a0609;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;z-index:100;transition:opacity .8s;}
+  #ld.done{opacity:0;pointer-events:none;}
+  #ld h1{color:#f0e0bc;font-size:52px;font-style:italic;font-family:'Cormorant Garamond',Georgia,serif;letter-spacing:.1em;}
+  #ld p{color:#9a7a50;font-size:11px;letter-spacing:.25em;text-transform:uppercase;font-family:sans-serif;
+    margin-top:20px;text-align:center;padding:0 30px;line-height:2;}
+  .lbar{width:120px;height:1px;background:rgba(201,169,110,0.2);margin-top:24px;}
+  .lbar-f{height:100%;background:#c9a96e;width:0%;transition:width .4s;}
+  #ui{position:fixed;bottom:0;left:0;right:0;padding:0 0 44px;
+    background:linear-gradient(to top,rgba(0,0,0,0.75)0%,transparent 100%);
+    display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none;}
+  .un{font-size:42px;font-style:italic;font-weight:300;color:#f0e0bc;letter-spacing:.12em;
+    font-family:'Cormorant Garamond',Georgia,serif;text-shadow:0 0 24px rgba(201,169,110,0.5);}
+  .ub{font-size:10px;letter-spacing:.38em;color:#c9a96e;text-transform:uppercase;font-family:sans-serif;opacity:.85;}
+  .ut{font-size:9px;letter-spacing:.22em;color:#9a7a50;text-transform:uppercase;font-family:sans-serif;}
+  .corner{width:20px;height:20px;border-color:#c9a96e;border-style:solid;position:fixed;opacity:.5;}
+  .corner.tl{top:16px;left:16px;border-width:1px 0 0 1px;}
+  .corner.tr{top:16px;right:16px;border-width:1px 1px 0 0;}
+  .corner.bl{bottom:16px;left:16px;border-width:0 0 1px 1px;}
+  .corner.br{bottom:16px;right:16px;border-width:0 1px 1px 0;}
+  #hint{position:fixed;top:42%;left:50%;transform:translate(-50%,-50%);
+    font-size:11px;letter-spacing:.22em;color:rgba(201,169,110,0.55);text-transform:uppercase;
+    font-family:sans-serif;pointer-events:none;text-align:center;transition:opacity .5s;}
+  #hint.hide{opacity:0;}
+  #dbg{position:fixed;top:10px;left:10px;color:lime;font-size:10px;font-family:monospace;
+    background:rgba(0,0,0,0.6);padding:6px;line-height:1.7;z-index:99;pointer-events:none;}
+  #snap{position:fixed;bottom:60px;left:50%;transform:translateX(-50%);
+    width:70px;height:70px;border-radius:50%;border:3px solid rgba(255,255,255,0.9);
+    background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+  #snap:active{transform:translateX(-50%) scale(.92);}
+  #si{width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,0.9);}
+  #flash{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none;}
+  #savedmsg{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:rgba(0,0,0,0.75);color:#f0e0bc;font-size:13px;letter-spacing:.15em;
+    padding:14px 28px;border:1px solid rgba(201,169,110,0.4);opacity:0;
+    transition:opacity .3s;pointer-events:none;text-align:center;font-family:sans-serif;}
+  #savedmsg.show{opacity:1;}
+</style>
+</head>
+<body>
+<div id="ld">
+  <h1>Rich</h1>
+  <p id="lp">Starting…</p>
+  <div class="lbar"><div class="lbar-f" id="lf"></div></div>
+</div>
+<video id="v" autoplay playsinline muted></video>
+<canvas id="c"></canvas>
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+<div id="hint">Open your mouth to reveal the grill</div>
+<div id="dbg" id="dbg"></div>
+<div id="ui">
+  <div class="ub">John Richmond</div>
+  <div class="un">Rich</div>
+  <div class="ut">Dare to be legendary</div>
+</div>
+<button id="snap"><div id="si"></div></button>
+<div id="flash"></div>
+<div id="savedmsg"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@1.0.5/dist/face-landmarks-detection.min.js"></script>
+<script>
+const vid=document.getElementById('v'),can=document.getElementById('c'),ctx=can.getContext('2d');
+const lpEl=document.getElementById('lp'),lfEl=document.getElementById('lf');
+const ldEl=document.getElementById('ld'),hint=document.getElementById('hint'),dbg=document.getElementById('dbg');
+let W,H,grillA=0,parts=[],frameN=0,hintHidden=false,detector=null,lastKPs=null,VW=0,VH=0;
+
+function resize(){can.width=W=window.innerWidth;can.height=H=window.innerHeight;}
+resize();window.addEventListener('resize',resize);
+function setSt(t,p){lpEl.textContent=t;lfEl.style.width=p+'%';}
+function finish(){lfEl.style.width='100%';setTimeout(()=>ldEl.classList.add('done'),600);}
+
+// TF face-landmarks-detection returns keypoints as array of {x,y,z,name}
+// x,y are in VIDEO pixel space. Video has CSS scaleX(-1) so we mirror x.
+function kp(p){
+  // object-fit cover transform
+  const vAR=VW/VH,cAR=W/H;
+  let sx,ox,oy;
+  if(vAR>cAR){sx=H/VH;ox=(W-VW*sx)/2;oy=0;}
+  else{sx=W/VW;ox=0;oy=(H-VH*sx)/2;}
+  return{x:W-(p.x*sx+ox),y:p.y*sx+oy};
+}
+
+// Find keypoint by name
+function byName(kps,name){return kps.find(k=>k.name===name)||kps[0];}
+
+// Get all keypoints matching a list of names
+function byNames(kps,names){return names.map(n=>byName(kps,n));}
+
+// MediaPipe mesh named keypoints for mouth
+// Upper lip inner: lipsUpperInner
+// Lower lip inner: lipsLowerInner  
+// Mouth corners: leftMouthCorner, rightMouthCorner
+
+function getMouthOpen(kps){
+  // Use named points if available, else use indices
+  const named=kps.some(k=>k.name);
+  let top,bot,fTop,fBot;
+  if(named){
+    top=byName(kps,'lipsUpperInner');
+    bot=byName(kps,'lipsLowerInner');
+    fTop=byName(kps,'midwayBetweenEyes');
+    fBot=byName(kps,'chin');
+  } else {
+    top=kps[13];bot=kps[14];fTop=kps[10];fBot=kps[152];
+  }
+  const t=kp(top),b=kp(bot),ft=kp(fTop),fb=kp(fBot);
+  const faceH=Math.abs(fb.y-ft.y)||1;
+  return Math.abs(b.y-t.y)/faceH;
+}
+
+function getGrillPoints(kps){
+  const named=kps.some(k=>k.name);
+  let lc,rc,ulPts;
+  if(named){
+    lc=kp(byName(kps,'leftMouthCorner'));
+    rc=kp(byName(kps,'rightMouthCorner'));
+    // upper lip inner points - get all with lipsUpper in name
+    const ulAll=kps.filter(k=>k.name&&k.name.includes('lipsUpper'));
+    ulPts=ulAll.length>3?ulAll.map(kp):null;
+  }
+  // Fallback to indices (MediaPipe 468 mesh standard)
+  if(!ulPts){
+    // Mouth corners: 61, 291
+    // Upper inner lip: 78,191,80,81,82,13,312,311,310,415,308
+    const MC_L=[61],MC_R=[291];
+    const UL=[78,191,80,81,82,13,312,311,310,415,308];
+    lc=kp(kps[61]||kps[0]);
+    rc=kp(kps[291]||kps[0]);
+    ulPts=UL.map(i=>kp(kps[i]||kps[0]));
+  }
+  return{lc,rc,ulPts};
+}
+
+function drawGrill(kps,alpha){
+  if(alpha<0.01)return;
+  const{lc,rc,ulPts}=getGrillPoints(kps);
+  const gL=Math.min(lc.x,rc.x),gR=Math.max(lc.x,rc.x);
+  const gW=gR-gL,gH=gW*0.28;
+  const letters=['R','I','C','H'],n=4,tW=gW/n;
+
+  ctx.save();ctx.globalAlpha=alpha;
+  ctx.beginPath();
+  ctx.moveTo(ulPts[0].x,ulPts[0].y);
+  ulPts.forEach(p=>ctx.lineTo(p.x,p.y));
+  ctx.lineTo(ulPts[ulPts.length-1].x,ulPts[ulPts.length-1].y+gH*1.2);
+  ctx.lineTo(ulPts[0].x,ulPts[0].y+gH*1.2);
+  ctx.closePath();ctx.clip();
+
+  for(let i=0;i<n;i++){
+    const tx=gL+i*tW,gap=tW*0.04;
+    const prog=(i+0.5)/n,idx=prog*(ulPts.length-1);
+    const i0=Math.min(Math.floor(idx),ulPts.length-2),fr=idx-i0;
+    const ty=ulPts[i0].y*(1-fr)+ulPts[i0+1].y*fr;
+    const g=ctx.createLinearGradient(tx,ty,tx,ty+gH);
+    g.addColorStop(0,'#fff8b0');g.addColorStop(0.12,'#ffe55c');
+    g.addColorStop(0.42,'#c9a96e');g.addColorStop(0.75,'#8a5e28');g.addColorStop(1,'#4a2c0a');
+    ctx.fillStyle=g;ctx.shadowColor='rgba(255,200,60,0.3)';ctx.shadowBlur=5;
+    rr(ctx,tx+gap,ty,tW-gap*2,gH,Math.min(tW*0.1,4));ctx.fill();
+    const sh=ctx.createLinearGradient(tx,ty,tx,ty+gH*0.38);
+    sh.addColorStop(0,'rgba(255,255,220,0.52)');sh.addColorStop(1,'rgba(255,255,220,0)');
+    ctx.fillStyle=sh;ctx.shadowBlur=0;
+    rr(ctx,tx+gap+tW*0.08,ty+2,tW*0.38,gH*0.3,2);ctx.fill();
+    if(i>0){ctx.fillStyle='rgba(0,0,0,0.4)';ctx.fillRect(tx,ty,gap*2,gH);}
+    const fs=Math.max(gH*0.46,8);
+    ctx.font=`900 ${fs}px Arial Black,Arial,sans-serif`;
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillStyle='rgba(40,20,3,0.5)';ctx.shadowBlur=0;
+    ctx.fillText(letters[i],tx+tW/2+0.7,ty+gH*0.52+0.7);
+    ctx.fillStyle='#fffce0';ctx.shadowColor='rgba(255,240,100,0.8)';ctx.shadowBlur=3;
+    ctx.fillText(letters[i],tx+tW/2,ty+gH*0.5);
+  }
+  ctx.restore();
+
+  ctx.save();ctx.globalAlpha=alpha;
+  const bH=Math.max(gH*0.2,3);
+  ctx.beginPath();
+  ctx.moveTo(ulPts[0].x,ulPts[0].y-bH);
+  ulPts.forEach(p=>ctx.lineTo(p.x,p.y-bH));
+  ulPts.slice().reverse().forEach(p=>ctx.lineTo(p.x,p.y+1));
+  ctx.closePath();
+  const bg=ctx.createLinearGradient(gL,ulPts[0].y-bH,gL,ulPts[0].y+1);
+  bg.addColorStop(0,'#ffe880');bg.addColorStop(0.5,'#c9a96e');bg.addColorStop(1,'#7a5020');
+  ctx.fillStyle=bg;ctx.shadowColor='rgba(255,200,60,0.5)';ctx.shadowBlur=7;ctx.fill();
+  for(let i=1;i<n;i++){ctx.fillStyle='rgba(90,55,10,0.4)';ctx.fillRect(gL+i*tW-1,ulPts[0].y-bH,2,bH+1);}
+  ctx.restore();
+
+  if(alpha>0.5&&frameN%7===0){
+    const cx=(gL+gR)/2;
+    for(let i=0;i<2;i++)parts.push({x:cx+(Math.random()-.5)*gW,y:ulPts[Math.floor(ulPts.length/2)].y,
+      vx:(Math.random()-.5)*.6,vy:-(0.5+Math.random()*.8),life:1,decay:0.025+Math.random()*.015,size:.6+Math.random()*1.4});
+  }
+}
+
+// Debug: draw dots on all keypoints + highlight mouth
+function drawDebug(kps){
+  // Draw all as tiny green dots
+  kps.forEach((p,i)=>{
+    const c=kp(p);
+    ctx.beginPath();ctx.arc(c.x,c.y,1.5,0,Math.PI*2);
+    ctx.fillStyle='rgba(0,255,0,0.3)';ctx.fill();
+  });
+  // Mouth corner dots big + red
+  [61,291,78,191,80,81,82,13,312,311,310,415,308,14].forEach(i=>{
+    if(!kps[i])return;
+    const c=kp(kps[i]);
+    ctx.beginPath();ctx.arc(c.x,c.y,4,0,Math.PI*2);
+    ctx.fillStyle='red';ctx.fill();
+  });
+}
+
+function drawParts(){
+  for(let i=parts.length-1;i>=0;i--){
+    const p=parts[i];p.x+=p.vx;p.y+=p.vy;p.vy+=0.015;p.life-=p.decay;
+    if(p.life<=0){parts.splice(i,1);continue;}
+    ctx.save();ctx.globalAlpha=p.life*.7;ctx.fillStyle='#c9a96e';
+    ctx.beginPath();ctx.arc(p.x,p.y,p.size,0,Math.PI*2);ctx.fill();ctx.restore();
+  }
+}
+function rr(c,x,y,w,h,r){
+  r=Math.min(r,w/2,h/2);c.beginPath();
+  c.moveTo(x+r,y);c.lineTo(x+w-r,y);c.quadraticCurveTo(x+w,y,x+w,y+r);
+  c.lineTo(x+w,y+h-r);c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  c.lineTo(x+r,y+h);c.quadraticCurveTo(x,y+h,x,y+h-r);
+  c.lineTo(x,y+r);c.quadraticCurveTo(x,y,x+r,y);c.closePath();
+}
+
+async function runDetect(){
+  while(true){
+    if(detector&&vid.readyState>=2){
+      try{
+        const faces=await detector.estimateFaces(vid,{flipHorizontal:false});
+        if(faces&&faces.length>0){
+          lastKPs=faces[0].keypoints;
+          // debug info
+          const open=getMouthOpen(lastKPs);
+          const lc=kp(lastKPs[61]),rc=kp(lastKPs[291]);
+          dbg.textContent=`kps:${lastKPs.length} open:${(open*100).toFixed(1)}%\nlc:${lc.x.toFixed(0)},${lc.y.toFixed(0)} rc:${rc.x.toFixed(0)},${rc.y.toFixed(0)}\nVW:${VW} VH:${VH} W:${W} H:${H}`;
+        } else {lastKPs=null;dbg.textContent='no face';}
+      }catch(e){lastKPs=null;dbg.textContent='err:'+e.message;}
+    }
+    await new Promise(r=>setTimeout(r,50));
+  }
+}
+
+function loop(){
+  requestAnimationFrame(loop);
+  ctx.clearRect(0,0,W,H);
+  if(lastKPs&&lastKPs.length>100){
+    if(!hintHidden){hint.classList.add('hide');hintHidden=true;}
+    // always draw debug dots so we can see tracking
+    drawDebug(lastKPs);
+    const open=getMouthOpen(lastKPs);
+    const target=open>0.04?Math.min((open-0.04)/0.04,1):0;
+    grillA+=(target-grillA)*0.2;
+    if(grillA>0.01)drawGrill(lastKPs,grillA);
+  } else {
+    grillA*=0.85;
+    if(hintHidden){hint.classList.remove('hide');hintHidden=false;}
+  }
+  drawParts();frameN++;
+}
+
+async function init(){
+  setSt('Starting camera…',15);
+  try{
+    const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});
+    vid.srcObject=s;await vid.play();
+    await new Promise(r=>{const t=setInterval(()=>{if(vid.videoWidth){VW=vid.videoWidth;VH=vid.videoHeight;clearInterval(t);r();}},50);});
+  }catch(e){setSt('Allow camera & reload',0);return;}
+
+  setSt('Loading TensorFlow…',35);
+  await new Promise(r=>setTimeout(r,800));
+  if(!window.tf){setSt('TF not loaded',40);finish();loop();return;}
+
+  setSt('Loading face mesh model…',55);
+  try{
+    detector=await faceLandmarksDetection.createDetector(
+      faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh,
+      {runtime:'tfjs',refineLandmarks:false,maxFaces:1}
+    );
+  }catch(e){setSt('Error: '+e.message,85);setTimeout(finish,2500);loop();return;}
+
+  setSt('Ready',100);finish();
+  runDetect();loop();
+}
+
+document.getElementById('snap').addEventListener('click',()=>{
+  const fl=document.getElementById('flash');fl.style.transition='none';fl.style.opacity='1';
+  setTimeout(()=>{fl.style.transition='opacity .4s';fl.style.opacity='0';},80);
+  const out=document.createElement('canvas');out.width=W;out.height=H;
+  const oc=out.getContext('2d');
+  oc.save();oc.translate(W,0);oc.scale(-1,1);oc.drawImage(vid,0,0,W,H);oc.restore();
+  oc.drawImage(can,0,0);
+  oc.font='italic 300 38px Cormorant Garamond,Georgia,serif';
+  oc.fillStyle='rgba(240,224,188,0.92)';oc.textAlign='center';oc.fillText('Rich',W/2,H-60);
+  oc.font='11px sans-serif';oc.fillStyle='rgba(154,122,80,0.85)';oc.fillText('JOHN RICHMOND',W/2,H-38);
+  const a=document.createElement('a');a.href=out.toDataURL('image/jpeg',.92);a.download='rich.jpg';a.click();
+  const m=document.getElementById('savedmsg');m.textContent='Photo saved';m.classList.add('show');
+  setTimeout(()=>m.classList.remove('show'),2200);
+});
+
+init();
+</script>
+</body>
+</html>
